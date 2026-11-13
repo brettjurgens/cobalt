@@ -39,6 +39,7 @@
 namespace blink {
 
 BASE_FEATURE(kRiveRenderer, "RiveRenderer", base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kRiveInkbleed, "RiveInkbleed", base::FEATURE_DISABLED_BY_DEFAULT);
 
 class RiveGpuContext::Impl final : public rive::Factory {
  public:
@@ -198,7 +199,9 @@ RiveGpuContext* RiveGpuContext::Get() {
   auto wrapper = std::make_unique<WebGraphicsContext3DProviderWrapper>(
       std::move(provider));
   std::unique_ptr<cobalt_rive::RendererGL> renderer =
-      cobalt_rive::RendererGL::Create(wrapper->ContextProvider().ContextGL());
+      cobalt_rive::RendererGL::Create(
+          wrapper->ContextProvider().ContextGL(),
+          base::FeatureList::IsEnabled(kRiveInkbleed));
   if (!renderer) {
     LOG(WARNING) << "Rive Renderer: rejected the GPU context; using Skia.";
     unsupported = true;

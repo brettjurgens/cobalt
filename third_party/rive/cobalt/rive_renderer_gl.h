@@ -36,8 +36,12 @@ namespace cobalt_rive {
 // whenever they are released.
 class RendererGL {
  public:
-  // Null if Rive Renderer can't run on `gl` (it needs GLES 3.0).
-  static std::unique_ptr<RendererGL> Create(gpu::gles2::GLES2Interface* gl);
+  // Null if Rive Renderer can't run on `gl` (it needs GLES 3.0). `inkbleed`
+  // selects Rive's experimental mode for low-end GPUs: depth/stencil without
+  // MSAA, clockwise fills, and strokes antialiased by bleeding out half a
+  // pixel (fills aren't antialiased yet).
+  static std::unique_ptr<RendererGL> Create(gpu::gles2::GLES2Interface* gl,
+                                            bool inkbleed = false);
   ~RendererGL();
 
   RendererGL(const RendererGL&) = delete;
@@ -85,9 +89,11 @@ class RendererGL {
 
  private:
   RendererGL(gpu::gles2::GLES2Interface* gl,
-             std::unique_ptr<rive::gpu::RenderContext> render_context);
+             std::unique_ptr<rive::gpu::RenderContext> render_context,
+             bool inkbleed);
 
   gpu::gles2::GLES2Interface* const gl_;
+  const bool inkbleed_;
   std::unique_ptr<rive::gpu::RenderContext> render_context_;
 };
 

@@ -37,6 +37,10 @@ namespace blink {
 // also the fallback wherever Rive Renderer can't run.
 CORE_EXPORT BASE_DECLARE_FEATURE(kRiveRenderer);
 
+// Draws with Rive Renderer's experimental "inkbleed" mode for low-end GPUs
+// (depth/stencil without MSAA; strokes antialiased, fills not yet).
+CORE_EXPORT BASE_DECLARE_FEATURE(kRiveInkbleed);
+
 // The GPU context and Rive Renderer state shared by all players on the main
 // thread.
 class CORE_EXPORT RiveGpuContext {

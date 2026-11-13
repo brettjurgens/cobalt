@@ -47,7 +47,8 @@ rive::gpu::RenderContextGLImpl* GLImpl(rive::gpu::RenderContext* context) {
 
 // static
 std::unique_ptr<RendererGL> RendererGL::Create(
-    gpu::gles2::GLES2Interface* gl) {
+    gpu::gles2::GLES2Interface* gl,
+    bool inkbleed) {
   static bool initialized = false;
   if (!initialized) {
     gles2::Initialize();
@@ -60,12 +61,26 @@ std::unique_ptr<RendererGL> RendererGL::Create(
     return nullptr;
   }
   return std::unique_ptr<RendererGL>(
-      new RendererGL(gl, std::move(render_context)));
+      new RendererGL(gl, std::move(render_context), inkbleed));
 }
 
 RendererGL::RendererGL(gpu::gles2::GLES2Interface* gl,
-                       std::unique_ptr<rive::gpu::RenderContext> render_context)
-    : gl_(gl), render_context_(std::move(render_context)) {}
+                       std::unique_ptr<rive::gpu::RenderContext> render_context,
+                       bool inkbleed)
+    : gl_(gl), inkbleed_(inkbleed), render_context_(std::move(render_context)) {}
+
+namespace {
+
+void ApplyInkbleed(bool inkbleed,
+                   rive::gpu::RenderContext::FrameDescriptor& frame) {
+  if (inkbleed) {
+    frame.msaaSampleCount = 1;
+    frame.clockwiseFillOverride = true;
+    frame.inkbleedOverride = true;
+  }
+}
+
+}  // namespace
 
 RendererGL::~RendererGL() {
   gles2::SetGLContext(gl_);
@@ -84,6 +99,7 @@ std::string RendererGL::Description() const {
   gles2::SetGLContext(gl_);
   rive::gpu::RenderContext::FrameDescriptor frame;
   frame.renderTargetWidth = frame.renderTargetHeight = 1;
+  ApplyInkbleed(inkbleed_, frame);
   const GLCapabilities& caps =
       GLImpl(render_context_.get())->capabilities();
   std::string description =
@@ -98,6 +114,9 @@ std::string RendererGL::Description() const {
   description += caps.EXT_shader_pixel_local_storage ? "1" : "0";
   description += ", KHR_blend_equation_advanced ";
   description += caps.KHR_blend_equation_advanced ? "1" : "0";
+  if (inkbleed_) {
+    description += "; inkbleed";
+  }
   return description;
 }
 
@@ -161,6 +180,7 @@ void RendererGL::Draw(Target& target,
   frame.renderTargetHeight = target.height();
   frame.loadAction = rive::gpu::LoadAction::clear;
   frame.clearColor = 0;
+  ApplyInkbleed(inkbleed_, frame);
   render_context_->beginFrame(frame);
   target.target_->setTargetTexture(
       target.offscreen_texture_ ? target.offscreen_texture_ : texture);
