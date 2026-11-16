@@ -1238,6 +1238,13 @@ void HTMLRiveElement::PageVisibilityChanged() {
 void HTMLRiveElement::RemovedFrom(ContainerNode& insertion_point) {
   CancelScheduledAnimation();
   CancelLoader();
+  // Nothing shows the player's surface once it is off the page. Free it now:
+  // left to the element's destructor, it stays until garbage collection, and
+  // players that come and go (e.g. list rows) each hold one in the meantime.
+  // Painting makes it again if the player returns.
+  if (insertion_point.isConnected()) {
+    gpu_surface_.reset();
+  }
   HTMLElement::RemovedFrom(insertion_point);
 }
 
