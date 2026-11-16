@@ -408,7 +408,7 @@ bool HTMLRiveElement::advance(double seconds) {
     return false;
   }
   bool keep_going = AdvanceInternal(static_cast<float>(seconds));
-  InvalidateRivePaint();
+  InvalidateRivePaintIfChanged();
   return keep_going;
 }
 
@@ -1169,7 +1169,7 @@ void HTMLRiveElement::OnAnimationFrame(double high_res_now_ms) {
   last_frame_time_ms_ = high_res_now_ms;
 
   bool keep_going = AdvanceInternal(elapsed_seconds);
-  InvalidateRivePaint();
+  InvalidateRivePaintIfChanged();
 
   if (keep_going || (state_machine_ && state_machine_->needsAdvance())) {
     ScheduleAnimationIfNeeded();
@@ -1697,6 +1697,15 @@ void HTMLRiveElement::InvalidateRivePaint() {
   if (LayoutObject* layout_object = GetLayoutObject()) {
     layout_object->SetShouldDoFullPaintInvalidationWithoutLayoutChange(
         PaintInvalidationReason::kImage);
+  }
+}
+
+// Advancing doesn't always change the picture: a state machine can keep
+// running after its animation stops moving. The artboard tracks whether it
+// changed since it was last drawn.
+void HTMLRiveElement::InvalidateRivePaintIfChanged() {
+  if (artboard_ && artboard_->didChange()) {
+    InvalidateRivePaint();
   }
 }
 

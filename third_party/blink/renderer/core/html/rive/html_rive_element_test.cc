@@ -348,6 +348,44 @@ TEST_F(HTMLRiveElementTest, FocusColorAppliesOnFirstFrameWhenIdle) {
   EXPECT_EQ(black, 0u);
 }
 
+// Frames keep coming while a state machine runs, which can be long after its
+// animation stops moving. Only the frames that change the picture repaint.
+TEST_F(HTMLRiveElementTest, AnimationFrameRepaintsOnlyWhenPictureChanged) {
+  SetBodyInnerHTML(R"HTML(
+    <rive-player id="icon" style="width: 96px; height: 96px;"></rive-player>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+  std::optional<std::vector<uint8_t>> bytes =
+      base::ReadFileToBytes(GetTestDataPath("focus_like.riv"));
+  ASSERT_TRUE(bytes.has_value());
+  auto* icon = static_cast<HTMLRiveElement*>(GetElementById("icon"));
+  ASSERT_TRUE(icon->loadFromBuffer(DOMArrayBuffer::Create(*bytes)));
+  icon->advance(1.0);
+  UpdateAllLifecyclePhasesForTest();
+
+  auto needs_repaint = [&]() {
+    return icon->GetLayoutObject()->ShouldDoFullPaintInvalidation();
+  };
+
+  // The like animation moves on the frames after it starts.
+  ASSERT_TRUE(icon->setViewModelBoolean("liked", true));
+  UpdateAllLifecyclePhasesForTest();
+  icon->OnAnimationFrame(1000.0);  // First frame after idle: zero elapsed.
+  UpdateAllLifecyclePhasesForTest();
+  icon->OnAnimationFrame(1016.0);
+  EXPECT_TRUE(needs_repaint());
+
+  // Long after it has settled, a frame changes nothing.
+  for (int i = 0; i < 600; ++i) {
+    icon->advance(1.0 / 60);
+  }
+  UpdateAllLifecyclePhasesForTest();
+  icon->OnAnimationFrame(20000.0);
+  UpdateAllLifecyclePhasesForTest();
+  icon->OnAnimationFrame(20016.0);
+  EXPECT_FALSE(needs_repaint());
+}
+
 TEST_F(HTMLRiveElementTest, FocusScrollStartPinsFocusedItem) {
   // list_shelf.riv: 320px cards, 344px apart, scrolling horizontally.
   SetBodyInnerHTML(R"HTML(

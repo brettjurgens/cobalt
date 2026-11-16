@@ -205,6 +205,7 @@ class CORE_EXPORT HTMLRiveElement final : public HTMLElement,
   void ScheduleAnimationIfNeeded();
   void CancelScheduledAnimation();
   void InvalidateRivePaint();
+  void InvalidateRivePaintIfChanged();
   void DispatchReportedRiveEvents();
   void OnViewModelValuesChanged();
   bool AddListItems(const String& list_path,
