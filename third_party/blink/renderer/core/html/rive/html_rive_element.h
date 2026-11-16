@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
@@ -215,8 +216,13 @@ class CORE_EXPORT HTMLRiveElement final : public HTMLElement,
   void AlignFocusedToScrollStart();
   rive::ArtboardComponentList* FindArtboardList() const;
   void SetListItemValue(rive::ViewModelInstanceRuntime* instance,
+                        const String& list_path,
+                        int index,
                         const String& property,
                         const String& value);
+  void UpdateListImages();
+  void LoadListImage(const String& url);
+  void ReleaseUnusedListImages();
   bool HandleKeyboardEvent(const KeyboardEvent& event);
   bool EnterRiveFocusFromEdge(rive::Direction direction);
   void EnterRiveFocusIfNeeded(mojom::blink::FocusType type);
@@ -254,6 +260,24 @@ class CORE_EXPORT HTMLRiveElement final : public HTMLElement,
   double last_frame_time_ms_ = 0.0;
   String last_event_name_;
   size_t reported_events_seen_ = 0;
+
+  // An image a list item shows. Only items near the viewport keep theirs
+  // loaded (see UpdateListImages()): a long list would otherwise hold a
+  // texture for every item it was ever given.
+  struct ListImage {
+    rive::rcp<rive::ViewModelInstanceRuntime> instance;
+    String list_path;
+    int index;
+    std::string property;
+    String url;
+    // Near the viewport: its image is loaded, or loading.
+    bool loaded = false;
+  };
+  std::vector<ListImage> list_images_;
+  // The item range the images were last matched against.
+  int list_images_first_ = -1;
+  int list_images_last_ = -1;
+  bool list_images_changed_ = false;
 
   // Image URLs used by list items: in-flight or finished fetches, and the
   // Rive images made from finished ones.

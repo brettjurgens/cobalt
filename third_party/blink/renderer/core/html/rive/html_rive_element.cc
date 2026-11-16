@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/core/html/rive/html_rive_element.h"
 
 #include <algorithm>
+#include <limits>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -58,6 +59,11 @@
 namespace blink {
 
 namespace {
+
+// List items this close to the ones a virtualized list has realized keep
+// their images loaded, so an image is usually ready before its item scrolls
+// into view.
+constexpr int kListImageMargin = 4;
 
 class RiveFrameCallback final : public FrameCallback {
  public:
@@ -191,7 +197,7 @@ HTMLRiveElement::HTMLRiveElement(Document& document)
 
 // Loads one image URL for list items through Blink's image loader (sharing
 // its memory cache, no CORS needed since pixels are only drawn) and hands the
-// result to the element once, for every item that asked for it.
+// result to the element once.
 class RiveImageRequest final : public GarbageCollected<RiveImageRequest>,
                                public ImageResourceObserver {
  public:
@@ -204,17 +210,6 @@ class RiveImageRequest final : public GarbageCollected<RiveImageRequest>,
     if (content_->IsLoaded()) {
       ImageNotifyFinished(content_);
     }
-  }
-
-  void AddTarget(rive::rcp<rive::ViewModelInstanceRuntime> instance,
-                 std::string property) {
-    targets_.emplace_back(std::move(instance), std::move(property));
-  }
-
-  // Hands over the items waiting for this image.
-  std::vector<std::pair<rive::rcp<rive::ViewModelInstanceRuntime>, std::string>>
-  TakeTargets() {
-    return std::move(targets_);
   }
 
   bool finished() const { return finished_; }
@@ -240,8 +235,6 @@ class RiveImageRequest final : public GarbageCollected<RiveImageRequest>,
   Member<ImageResourceContent> content_;
   String url_;
   bool finished_ = false;
-  std::vector<std::pair<rive::rcp<rive::ViewModelInstanceRuntime>, std::string>>
-      targets_;
 };
 
 HTMLRiveElement::~HTMLRiveElement() {
@@ -686,6 +679,10 @@ bool HTMLRiveElement::AddListItems(
     // content): start it at the beginning with nothing focused.
     state_machine_->clearFocus();
     list->removeAllInstances();
+    std::erase_if(list_images_, [&](const ListImage& image) {
+      return image.list_path == list_path;
+    });
+    list_images_changed_ = true;
     if (rive::ArtboardComponentList* component_list = FindArtboardList()) {
       if (rive::ScrollConstraint* scroll = component_list->scrollConstraint()) {
         scroll->setScrollIndex(0.0f);
@@ -698,8 +695,9 @@ bool HTMLRiveElement::AddListItems(
     if (!instance) {
       continue;
     }
+    const int index = static_cast<int>(list->size());
     for (const auto& [property, value] : item) {
-      SetListItemValue(instance.get(), property, value);
+      SetListItemValue(instance.get(), list_path, index, property, value);
     }
     list->addInstance(instance.get());
   }
@@ -711,6 +709,8 @@ bool HTMLRiveElement::AddListItems(
 }
 
 void HTMLRiveElement::SetListItemValue(rive::ViewModelInstanceRuntime* instance,
+                                       const String& list_path,
+                                       int index,
                                        const String& property,
                                        const String& value) {
   rive::ViewModelInstanceValueRuntime* prop =
@@ -747,36 +747,31 @@ void HTMLRiveElement::SetListItemValue(rive::ViewModelInstanceRuntime* instance,
           value.Utf8());
       break;
     case rive::DataType::assetImage: {
-      auto* image_prop =
-          static_cast<rive::ViewModelInstanceAssetImageRuntime*>(prop);
       const KURL url = GetDocument().CompleteURL(value);
-      if (value.empty() || !url.IsValid() || !GetExecutionContext()) {
-        image_prop->value(nullptr);
-        break;
-      }
-      const String key = url.GetString();
-      auto cached = image_cache_.find(key.Utf8());
-      if (cached != image_cache_.end()) {
-        image_prop->value(cached->second.get());
-        break;
-      }
-      auto it = image_requests_.find(key);
-      if (it != image_requests_.end()) {
-        // Still loading: wait for it. (A finished request with no cached
-        // image failed; leave the item without an image.)
-        if (!it->value->finished()) {
-          it->value->AddTarget(rive::ref_rcp(instance), property.Utf8());
+      const bool has_image =
+          !value.empty() && url.IsValid() && GetExecutionContext();
+      const std::string property_name = property.Utf8();
+      auto it = std::find_if(
+          list_images_.begin(), list_images_.end(),
+          [&](const ListImage& image) {
+            return image.index == index && image.property == property_name &&
+                   image.list_path == list_path;
+          });
+      if (it != list_images_.end()) {
+        if (has_image && it->url == url.GetString()) {
+          break;
         }
-        break;
+        list_images_.erase(it);
       }
-      auto* request = MakeGarbageCollected<RiveImageRequest>(this, key);
-      image_requests_.Set(key, request);
-      request->AddTarget(rive::ref_rcp(instance), property.Utf8());
-      ResourceLoaderOptions options(GetExecutionContext()->GetCurrentWorld());
-      options.initiator_info.name = localName();
-      FetchParameters params(ResourceRequest(url), options);
-      request->Start(
-          ImageResourceContent::Fetch(params, GetDocument().Fetcher()));
+      // UpdateListImages() shows the new one once the item is near the
+      // viewport.
+      static_cast<rive::ViewModelInstanceAssetImageRuntime*>(prop)->value(
+          nullptr);
+      if (has_image) {
+        list_images_.push_back({rive::ref_rcp(instance), list_path, index,
+                                property_name, url.GetString()});
+      }
+      list_images_changed_ = true;
       break;
     }
     default:
@@ -790,8 +785,15 @@ void HTMLRiveElement::OnListImageLoaded(const String& url,
   if (it == image_requests_.end()) {
     return;
   }
-  auto targets = it->value->TakeTargets();
   if (!content || content->ErrorOccurred() || !content->HasImage()) {
+    return;
+  }
+  const bool wanted = std::any_of(
+      list_images_.begin(), list_images_.end(),
+      [&](const ListImage& image) { return image.loaded && image.url == url; });
+  if (!wanted) {
+    // Its items scrolled away while it loaded; it loads again if one returns.
+    image_requests_.erase(it);
     return;
   }
   // With Skia the image stays lazily decoded; cc decodes it off the main
@@ -811,12 +813,118 @@ void HTMLRiveElement::OnListImageLoaded(const String& url,
     return;
   }
   image_cache_[url.Utf8()] = image;
-  for (auto& [instance, property] : targets) {
-    if (auto* image_prop = instance->propertyImage(property)) {
-      image_prop->value(image.get());
+  for (ListImage& list_image : list_images_) {
+    if (list_image.loaded && list_image.url == url) {
+      if (auto* image_prop =
+              list_image.instance->propertyImage(list_image.property)) {
+        image_prop->value(image.get());
+      }
     }
   }
   OnViewModelValuesChanged();
+}
+
+// Loads the images of list items near the viewport and lets go of the rest.
+// "Near" is the range of items a virtualized list has realized (the visible
+// ones and its buffer) plus a margin. Without that range, every image stays
+// loaded: when the list isn't virtualized, or when images sit in more than
+// one list (the range is that of the artboard's first list).
+void HTMLRiveElement::UpdateListImages() {
+  if (list_images_.empty() && !list_images_changed_) {
+    return;
+  }
+  int first = 0;
+  int last = std::numeric_limits<int>::max();
+  rive::ArtboardComponentList* list = FindArtboardList();
+  const bool one_list = std::all_of(
+      list_images_.begin(), list_images_.end(), [&](const ListImage& image) {
+        return image.list_path == list_images_.front().list_path;
+      });
+  if (list && list->virtualizationEnabled() && one_list) {
+    std::vector<int> realized;
+    list->realizedIndices(realized);
+    if (realized.empty() && list->itemCount() > 0) {
+      // Not laid out yet; an advance follows.
+      return;
+    }
+    // (An empty list has nothing near the viewport: first > last.)
+    first = realized.empty() ? 0 : realized.front() - kListImageMargin;
+    last = realized.empty() ? -1 : realized.back() + kListImageMargin;
+  }
+  if (!list_images_changed_ && first == list_images_first_ &&
+      last == list_images_last_) {
+    return;
+  }
+  list_images_changed_ = false;
+  list_images_first_ = first;
+  list_images_last_ = last;
+
+  bool shown = false;
+  for (ListImage& image : list_images_) {
+    const bool near = image.index >= first && image.index <= last;
+    if (near == image.loaded) {
+      continue;
+    }
+    image.loaded = near;
+    rive::ViewModelInstanceAssetImageRuntime* image_prop =
+        image.instance->propertyImage(image.property);
+    if (!image_prop) {
+      continue;
+    }
+    if (!near) {
+      image_prop->value(nullptr);
+      continue;
+    }
+    auto cached = image_cache_.find(image.url.Utf8());
+    if (cached != image_cache_.end()) {
+      image_prop->value(cached->second.get());
+      shown = true;
+    } else {
+      LoadListImage(image.url);
+    }
+  }
+  ReleaseUnusedListImages();
+  if (shown) {
+    OnViewModelValuesChanged();
+  }
+}
+
+void HTMLRiveElement::LoadListImage(const String& url) {
+  // Already loading; or it failed, and the item stays without an image.
+  if (image_requests_.Contains(url) || !GetExecutionContext()) {
+    return;
+  }
+  auto* request = MakeGarbageCollected<RiveImageRequest>(this, url);
+  image_requests_.Set(url, request);
+  ResourceLoaderOptions options(GetExecutionContext()->GetCurrentWorld());
+  options.initiator_info.name = localName();
+  FetchParameters params(ResourceRequest(KURL(url)), options);
+  request->Start(ImageResourceContent::Fetch(params, GetDocument().Fetcher()));
+}
+
+// Frees the images no item near the viewport shows, and forgets their
+// fetches so they load again (from Blink's cache) when an item returns.
+void HTMLRiveElement::ReleaseUnusedListImages() {
+  auto used = [&](const String& url) {
+    return std::any_of(list_images_.begin(), list_images_.end(),
+                       [&](const ListImage& image) {
+                         return image.loaded && image.url == url;
+                       });
+  };
+  // Rive Renderer's images free their textures through the current context.
+  if (gpu_context_) {
+    gpu_context_->MakeCurrent();
+  }
+  std::erase_if(image_cache_, [&](const auto& entry) {
+    return !used(String::FromUTF8(entry.first));
+  });
+  Vector<String> unused;
+  for (const auto& entry : image_requests_) {
+    if (entry.value->finished() && !used(entry.key)) {
+      unused.push_back(entry.key);
+    }
+  }
+  image_requests_.RemoveAll(unused);
 }
 
 rive::ArtboardComponentList* HTMLRiveElement::FindArtboardList() const {
@@ -937,7 +1045,9 @@ bool HTMLRiveElement::setListItemValue(const String& list_path,
   if (!item || !item->property(property.Utf8())) {
     return false;
   }
-  SetListItemValue(item.get(), property, value);
+  SetListItemValue(item.get(), list_path, static_cast<int>(index), property,
+                   value);
+  UpdateListImages();
   OnViewModelValuesChanged();
   return true;
 }
@@ -1501,6 +1611,9 @@ bool HTMLRiveElement::LoadFromBytes(base::span<const uint8_t> bytes) {
   view_model_instance_.reset();
   artboard_.reset();
   rive_file_.reset();
+  // The list items went with the view model instance.
+  list_images_.clear();
+  list_images_changed_ = true;
 
   if (bytes.empty()) {
     return false;
@@ -1560,6 +1673,8 @@ void HTMLRiveElement::InstantiateArtboardAndScene() {
   animation_instance_.reset();
   view_model_instance_.reset();
   artboard_.reset();
+  list_images_.clear();
+  list_images_changed_ = true;
 
   if (!rive_file_) {
     return;
@@ -1649,21 +1764,22 @@ bool HTMLRiveElement::AdvanceInternal(float elapsed_seconds) {
     gpu_context_->MakeCurrent();
   }
 
+  bool keep_going;
   if (state_machine_) {
-    bool keep_going = state_machine_->advanceAndApply(elapsed_seconds);
+    keep_going = state_machine_->advanceAndApply(elapsed_seconds);
     // Advancing rebuilds the reported list, so everything in it is new.
     reported_events_seen_ = 0;
     DispatchReportedRiveEvents();
-    return keep_going;
-  }
-
-  if (animation_instance_) {
+  } else if (animation_instance_) {
     // advanceAndApply also reports an unfinished animation as still going
     // when no time passed (e.g. the first frame), unlike advance().
-    return animation_instance_->advanceAndApply(elapsed_seconds);
+    keep_going = animation_instance_->advanceAndApply(elapsed_seconds);
+  } else {
+    keep_going = artboard_->advance(elapsed_seconds);
   }
-
-  return artboard_->advance(elapsed_seconds);
+  // Advancing can scroll a list.
+  UpdateListImages();
+  return keep_going;
 }
 
 // Input handlers (pointer, keys) can report events synchronously, and the next

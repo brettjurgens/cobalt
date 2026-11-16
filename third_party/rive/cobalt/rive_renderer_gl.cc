@@ -124,11 +124,13 @@ rive::rcp<rive::RenderImage> RendererGL::MakeImage(uint32_t width,
                                                    uint32_t height,
                                                    const uint8_t* rgba_premul) {
   gles2::SetGLContext(gl_);
+  // One level, no mipmaps: UI images are drawn near their own size, and the
+  // chain adds a third to every texture.
   rive::rcp<rive::gpu::Texture> texture =
       GLImpl(render_context_.get())
-          ->makeImageTexture(width, height, rive::math::msb(width | height),
+          ->makeImageTexture(width, height, /*mipLevelCount=*/1,
                              rive::GPUTextureFormat::rgba32, rgba_premul, 1, 1,
-                             /*srgb=*/false, /*generateRemainingMips=*/true);
+                             /*srgb=*/false, /*generateRemainingMips=*/false);
   return texture ? rive::make_rcp<rive::RiveRenderImage>(std::move(texture))
                  : nullptr;
 }
