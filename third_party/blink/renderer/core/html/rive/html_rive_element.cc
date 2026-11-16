@@ -1651,10 +1651,9 @@ bool HTMLRiveElement::AdvanceInternal(float elapsed_seconds) {
   }
 
   if (animation_instance_) {
-    bool keep_going = animation_instance_->advance(elapsed_seconds);
-    animation_instance_->apply();
-    artboard_->advance(elapsed_seconds);
-    return keep_going;
+    // advanceAndApply also reports an unfinished animation as still going
+    // when no time passed (e.g. the first frame), unlike advance().
+    return animation_instance_->advanceAndApply(elapsed_seconds);
   }
 
   return artboard_->advance(elapsed_seconds);
