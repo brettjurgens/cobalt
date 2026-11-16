@@ -100,7 +100,7 @@ BASE_FEATURE_PARAM(base::TimeDelta,
 // instead of one IPC and disk write per shader during startup.
 BASE_FEATURE(kCobaltGpuShaderDiskCache,
              "CobaltGpuShaderDiskCache",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Size in KB of the shader cache, both in memory and on disk. This replaces
 // the 128 KB low-end device default, which is too small to hold the shaders
@@ -110,6 +110,15 @@ BASE_FEATURE_PARAM(int,
                    &kCobaltGpuShaderDiskCache,
                    "CobaltGpuShaderDiskCache_size_kb",
                    2048);
+
+// Also persists GL program binaries (e.g. Rive Renderer's shaders, compiled
+// through ANGLE), so later launches don't compile them again on the main
+// thread's critical path.
+BASE_FEATURE_PARAM(bool,
+                   kCobaltGpuShaderDiskCacheGlPrograms,
+                   &kCobaltGpuShaderDiskCache,
+                   "CobaltGpuShaderDiskCache_gl_programs",
+                   true);
 #endif  // BUILDFLAG(IS_ANDROID)
 #endif  // BUILDFLAG(IS_COBALT)
 

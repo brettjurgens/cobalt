@@ -442,10 +442,18 @@ gles2::ProgramCache* GpuChannelManager::program_cache() {
     // when the feature is off: kCobaltGpuShaderDiskCacheSizeKb (which also
     // sets gpu_program_cache_size) is meant to size only the GrShaderCache.
     if (base::FeatureList::IsEnabled(features::kCobaltGpuShaderDiskCache)) {
-      disable_disk_cache = true;
+      // ...unless kCobaltGpuShaderDiskCacheGlPrograms asks to persist GL
+      // programs too (GpuHostImpl then opens their disk cache).
+      disable_disk_cache =
+          disable_disk_cache ||
+          !features::kCobaltGpuShaderDiskCacheGlPrograms.Get();
       program_cache_size = base::SysInfo::IsLowEndDevice()
                                ? kLowEndMaxProgramCacheMemoryBytes
                                : kDefaultMaxProgramCacheMemoryBytes;
+      // Rive Renderer's programs alone outgrow the low-end default.
+      if (features::kCobaltGpuShaderDiskCacheGlPrograms.Get()) {
+        program_cache_size = gpu_preferences_.gpu_program_cache_size;
+      }
     }
 #endif  // BUILDFLAG(IS_COBALT) && BUILDFLAG(IS_ANDROID)
 
